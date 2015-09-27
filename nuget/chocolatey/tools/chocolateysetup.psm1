@@ -51,9 +51,7 @@ param(
   else {
     Set-ChocolateyInstallFolder $chocolateyPath
   }
-  Create-DirectoryIfNotExists $chocolateyPath
-
-  Ensure-UserPermissions $chocolateyPath
+  Prepare-ChocolateyInstallFolder -Path $chocolateyPath -AllowInsecureInstall:$allowInsecureRootInstall
 
   #set up variables to add
   $chocolateyExePath = Join-Path $chocolateyPath 'bin'
@@ -279,6 +277,18 @@ param(
     catch {
       Write-Warning "Was not able to remove `'$chocolateyPathOld`'. You will need to manually remove it."
     }
+  }
+}
+
+function Prepare-ChocolateyInstallFolder {
+  [CmdletBinding()]
+  Param (
+    [string] $Path,
+    [switch] $AllowInsecureInstall
+  )
+  Process {
+    Create-DirectoryIfNotExists $Path
+    Ensure-UserPermissions $Path
   }
 }
 
