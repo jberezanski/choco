@@ -35,8 +35,7 @@ param(
   Import-Module $installModule -Force
 
   if ($chocolateyPath -eq '') {
-    $programData = [Environment]::GetFolderPath("CommonApplicationData")
-    $chocolateyPath = Join-Path "$programData" 'chocolatey'
+    $chocolateyPath = Get-DefaultChocolateyInstallFolder
   }
 
   # variable to allow insecure directory:
@@ -138,6 +137,12 @@ param(
 function Get-ChocolateyInstallFolder(){
   Write-Debug "Get-ChocolateyInstallFolder"
   [Environment]::GetEnvironmentVariable($chocInstallVariableName)
+}
+
+function Get-DefaultChocolateyInstallFolder {
+  $programData = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+  $defaultChocolateyPath = Join-Path -Path $programData -ChildPath 'Chocolatey'
+  return $defaultChocolateyPath
 }
 
 function Create-DirectoryIfNotExists($folderName){
