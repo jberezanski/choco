@@ -187,28 +187,6 @@ function Grant-Permissions {
   }
 }
 
-function Ensure-UserPermissions {
-param(
-  [string]$folder
-)
-  Write-Debug "Ensure-UserPermissions"
-
-  if (!(Test-ProcessAdminRights)) {
-    Write-Warning "User is not running elevated, cannot set user permissions."
-    return
-  }
-
-  $currentEA = $ErrorActionPreference
-  $ErrorActionPreference = 'Stop'
-  try {
-    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
-    Grant-Permissions -Path $folder -Grants @{$currentUser.Name = 'Modify'} -Inheritance 'None'
-  } catch {
-    Write-Warning "Not able to set permissions for user."
-  }
-  $ErrorActionPreference = $currentEA
-}
-
 function Upgrade-OldChocolateyInstall {
 param(
   [string]$chocolateyPathOld = "$sysDrive\Chocolatey",
@@ -288,15 +266,120 @@ param(
   }
 }
 
+function Test-IsPublicLocation {
+  [CmdletBinding()]
+  Param (
+    [Parameter(Mandatory = $true)]
+    [string] $Path
+  )
+  Process {
+    # check if Path is inside the user's profile directory
+    if ($Path.StartsWith($Env:UserProfile, [StringComparison]::CurrentCultureIgnoreCase)) {
+      return $false
+    }
+    # check a few probable locations, in case the user has redirected them out of Env:UserProfile
+    $candidates = @(
+      [Environment+SpecialFolder]::ApplicationData,
+      [Environment+SpecialFolder]::LocalApplicationData,
+      [Environment+SpecialFolder]::DesktopDirectory,
+      [Environment+SpecialFolder]::Personal # Documents
+    )
+    foreach ($candidate in $candidates) {
+      $specialFolderPath = [Environment]::GetFolderPath($candidate)
+      if ($Path.StartsWith($specialFolderPath, [StringComparison]::CurrentCultureIgnoreCase)) {
+        return $false
+      }
+    }
+    # (probably) not inside the user's profile, so assume it is public (err on the safe side)
+    # could also check the ACL, but it would be much work for little gain
+    return $true
+  }
+}
+
+function Get-LocalizedWellKnownPrincipalName {
+  [CmdletBinding()]
+  Param (
+    [Parameter(Mandatory = $true)]
+    [Security.Principal.WellKnownSidType] $WellKnownSidType
+  )
+  Process {
+    $sid = New-Object -TypeName 'System.Security.Principal.SecurityIdentifier' -ArgumentList @($WellKnownSidType, $null)
+    $account = $sid.Translate([Security.Principal.NTAccount])
+    return $account.Value
+  }
+}
+
+function Compute-SecurePermissions {
+  $builtinAdmins = Get-LocalizedWellKnownPrincipalName -WellKnownSidType ([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid)
+  $builtinUsers = Get-LocalizedWellKnownPrincipalName -WellKnownSidType ([Security.Principal.WellKnownSidType]::BuiltinUsersSid)
+  $localSystem = Get-LocalizedWellKnownPrincipalName -WellKnownSidType ([Security.Principal.WellKnownSidType]::LocalSystemSid)
+  $grants = @{
+    $builtinAdmins = [Security.AccessControl.FileSystemRights]::FullControl
+    $localSystem = [Security.AccessControl.FileSystemRights]::FullControl
+    $builtinUsers = [Security.AccessControl.FileSystemRights]::ReadAndExecute
+  }
+  return $grants
+}
+
 function Prepare-ChocolateyInstallFolder {
   [CmdletBinding()]
   Param (
+    [Parameter(Mandatory = $true)]
     [string] $Path,
     [switch] $AllowInsecureInstall
   )
   Process {
-    Create-DirectoryIfNotExists $Path
-    Ensure-UserPermissions $Path
+    $isFreshInstall = Test-Path -Path $Path # note: migration from old location (C:\Chocolatey) counts as fresh install here
+    $isAdmin = Test-ProcessAdminRights
+    $isDefaultLocation = $Path -eq (Get-DefaultChocolateyInstallFolder)
+    $isSystemwide = Test-IsPublicLocation -Path $Path
+    $securePermissions = Compute-SecurePermissions
+    $builtinAdminsSid = New-Object -TypeName 'System.Security.Principal.SecurityIdentifier' -ArgumentList @([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+    $permissionArgs = $null
+    if ($isFreshInstall) {
+      if ($isAdmin) {
+        if ($isSystemwide) {
+          # set secure permissions
+          $permissionArgs = @{ Grants = $securePermissions; BlockInheritance = $true; RemoveAllExistingPermissions = $true; Owner = $builtinAdminsSid }
+        } else {
+          # an admin user is installing into a private location - assume a per-user install is requested
+          # TODO: ask user if [s]he really wants a per-user install
+        }
+      } else {
+        # not an admin or not running elevated
+        if ($isSystemwide) {
+          # ask if user knows what [s]he is doing - perhaps forgot to run elevated
+        } else {
+          # TODO: ask user if [s]he really wants a per-user install
+        }
+      }
+      New-Item -ItemType Directory -Path $Path
+    } else {
+      # directory already exists (upgrade or prepared by user)
+      if ($isAdmin) {
+        if ($isSystemwide) {
+          # set secure permissions
+          $permissionArgs = @{ Grants = $securePermissions; BlockInheritance = $true; RemoveAllExistingPermissions = $true; Owner = $builtinAdminsSid }
+        } else {
+          # upgrade into a private location - do nothing (assume the user knew what [s]he was doing during the initial install)
+        }
+      } else {
+        # not an admin or not running elevated
+        if ($isSystemwide) {
+          if ($isDefaultLocation) {
+            # TODO: ask the user to restart the upgrade elevated
+            throw 'Elevation required'
+          } else {
+            # upgrade into a non-default public location - do nothing (assume the user knew what [s]he was doing during the initial install)
+          }
+        } else {
+          # upgrade into a private location - do nothing (assume the user knew what [s]he was doing during the initial install)
+        }
+      }
+    }
+    if ($permissionArgs -ne $null) {
+      Grant-Permissions -Path $Path @permissionArgs
+    }
   }
 }
 
