@@ -147,6 +147,40 @@ function Create-DirectoryIfNotExists($folderName){
   if (![System.IO.Directory]::Exists($folderName)) { [System.IO.Directory]::CreateDirectory($folderName) | Out-Null }
 }
 
+function Grant-Permissions {
+  [CmdletBinding()]
+  Param(
+    [string] $Path,
+    [hashtable] $Grants,
+    [switch] $BlockInheritance,
+    [switch] $CopyInheritedRights,
+    [switch] $RemoveAllExistingPermissions,
+    [string] $Inheritance = 'ObjectInherit,ContainerInherit',
+    [Security.Principal.IdentityReference] $Owner
+  )
+  Process {
+    Resolve-Path -Path $Path | Out-Null
+    if ($Owner -ne $null) {
+      $sections = 'Access,Owner'
+    } else {
+      $sections = 'Access'
+    }
+    $acl = (Get-Item -Path $Path).GetAccessControl($sections)
+    $acl.Access | Format-Table -AutoSize | Out-String | Write-Debug
+    if ($BlockInheritance) { $acl.SetAccessRuleProtection($true, $false) }
+    if ($RemoveAllExistingPermissions) { $acl.Access | % { $acl.RemoveAccessRuleAll($_) } }
+    $Grants.GetEnumerator() | ForEach-Object -Process { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule $($_.Key),$($_.Value),$Inheritance,'None','Allow')) }
+    if ($Owner -ne $null) {
+      $acl.Owner | Out-String | Write-Debug
+      $acl.SetOwner($Owner)
+    }
+    (Get-Item -Path $Path).SetAccessControl($acl)
+    $acl = Get-Acl -Path $Path
+    $acl.Access | Format-Table -AutoSize | Out-String | Write-Debug
+    $acl.Owner | Out-String | Write-Debug
+  }
+}
+
 function Ensure-UserPermissions {
 param(
   [string]$folder
@@ -161,20 +195,8 @@ param(
   $currentEA = $ErrorActionPreference
   $ErrorActionPreference = 'Stop'
   try {
-    # get current user
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
-    # get current acl
-    $acl = Get-Acl $folder
-
-    # define rule to set
-    $rights = "Modify"
-    $userAccessRule = New-Object System.Security.AccessControl.FileSystemAccessRule($currentUser.Name, $rights, "Allow")
-
-    # this is idempotent
-    Write-Output "Adding Modify permission for current user to '$folder'"
-    $acl.SetAccessRuleProtection($false,$true)
-    $acl.SetAccessRule($userAccessRule)
-    Set-Acl $folder $acl
+    Grant-Permissions -Path $folder -Grants @{$currentUser.Name = 'Modify'} -Inheritance 'None'
   } catch {
     Write-Warning "Not able to set permissions for user."
   }
