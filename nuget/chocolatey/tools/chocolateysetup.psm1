@@ -141,6 +141,9 @@ function Get-ChocolateyInstallFolder(){
 
 function Get-DefaultChocolateyInstallFolder {
   $programData = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+  if ($programData -eq '') {
+    $programData = Join-Path -Path $sysDrive -ChildPath 'ProgramData'
+  }
   $defaultChocolateyPath = Join-Path -Path $programData -ChildPath 'Chocolatey'
   return $defaultChocolateyPath
 }
