@@ -8,6 +8,7 @@ if '%1' == '-?' goto usage
 if '%1' == '?' goto usage
 if '%1' == '/help' goto usage
 
+SET ChocolateyInstall=
 SET DIR=%cd%
 SET BUILD_DIR=%~d0%~p0%
 SET NANT="%BUILD_DIR%lib\Nant\nant.exe"
